@@ -1,0 +1,149 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Dec  1 11:37:33 2023
+
+@author: Ece
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tensorflow as tf
+from keras.layers import Dense, Conv2D, Flatten
+from tensorflow.keras import datasets, layers, models
+from tensorflow.math import confusion_matrix
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.callbacks import ModelCheckpoint
+import os
+import cv2
+import warnings
+warnings.filterwarnings('ignore')
+
+train = pd.read_csv("labels.csv")
+
+train.head()
+train.shape
+
+train['breed_int'] = pd.Categorical(train['breed']).codes
+
+train.head()
+train.shape
+
+dog_groups = train.groupby("breed_int").breed.count()
+
+df_try = train.drop_duplicates(subset="breed_int")
+df_try = df_try.drop(columns="id")
+dog_breed_list = df_try.to_dict('dict')
+
+path = "train/"
+target_shape = (128, 128, 3)
+
+def load_and_preprocess_image(image_path, target_shape):
+    img = plt.imread(image_path)
+    img = cv2.resize(img, (target_shape[1], target_shape[0]))  # Resize the image
+    return img
+
+refactor_size = 128
+resized_image_list = []
+all_paths = []
+
+for i in range(len(train)):
+    image_path = os.path.join(path, train["id"][i] + '.jpg')
+    img = tf.keras.utils.load_img(image_path, target_size=(refactor_size, refactor_size))
+    img_vals = tf.image.convert_image_dtype(img, tf.float32)
+    imgarr = tf.keras.utils.img_to_array(img_vals)
+    resized_image_list.append(imgarr)
+    all_paths.append(image_path)
+
+resized_image_list = np.asarray(resized_image_list)
+
+nrow = 5
+ncol = 4
+fig1 = plt.figure(figsize=(15, 15))
+fig1.suptitle('After Resizing', size=32)
+for i in range(20):
+    plt.subplot(nrow, ncol, i + 1)
+    plt.imshow(resized_image_list[i])
+    plt.title('class = {x}, Dog is {y}'.format(x=train["id"][i], y=train["breed_int"][i]))
+    plt.axis('Off')
+    plt.grid(False)
+plt.show()
+
+data_augmentation = tf.keras.Sequential([
+    tf.keras.layers.RandomFlip('horizontal'),
+    tf.keras.layers.RandomRotation(0.2),
+])
+augmented_images = data_augmentation(resized_image_list)
+
+fig2 = plt.figure(figsize=(15, 15))
+fig2.suptitle('After Augmentation', size=32)
+for i in range(20):
+    plt.subplot(nrow, ncol, i + 1)
+    plt.imshow(augmented_images[i])
+    plt.title('class = {x}, Ship is {y}'.format(x=train["id"][i], y=train["breed_int"][i]))
+    plt.axis('Off')
+    plt.grid(False)
+plt.show()
+
+class_values = train["breed_int"] 
+class_values.value_counts()
+
+X_train, X_test, y_train, y_test = train_test_split(resized_image_list, class_values,random_state=30)
+print(X_train.shape, y_train.shape)
+
+model = models.Sequential([
+    tf.keras.Input(shape=(128, 128, 3)),
+    data_augmentation,
+    layers.Conv2D(32, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(64, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Conv2D(128, (3, 3), activation='relu'),
+    layers.MaxPooling2D((2, 2)),
+    layers.Flatten(),
+    layers.Dense(128, activation='sigmoid'),
+    layers.Dense(120, activation='softmax')
+])
+
+checkpoint = ModelCheckpoint('best_model.h5', monitor='val_accuracy', save_best_only=True, mode='max', verbose=1)
+
+model.compile(optimizer="adam", loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=50, callbacks=[checkpoint])
+
+best_model = models.load_model('best_model.h5')
+
+test_loss, best_test_acc = best_model.evaluate(X_test, y_test, verbose=2)
+print("\nBest Test Accuracy:", best_test_acc)
+
+best_predictions = best_model.predict(X_test)
+best_predicted_classes = np.argmax(best_predictions, axis=1)
+
+best_cm = confusion_matrix(y_test, best_predicted_classes)
+plt.figure(figsize=(8, 6))
+sns.heatmap(best_cm, annot=True, fmt='g', cmap='Blues', xticklabels=train["breed_int"], yticklabels=train["breed_int"])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.show()
+
+y_test = y_test.reset_index(drop=True)
+plt.figure(figsize=(15, 15))
+plt.suptitle('First 20 Predicted Images with Predicted Classes', size=20)
+for i in range(20):
+    plt.subplot(5, 4, i + 1)
+    plt.imshow(X_test[i])
+    predicted_class_label = best_predicted_classes[i]
+    actual_class_label = y_test[i]
+
+    if best_predicted_classes[i] == y_test[i]:
+        title_color = 'green'
+    else:
+        title_color = 'red'
+
+    title = f'Predicted Class: {predicted_class_label}\nActual Class: {actual_class_label}'
+    plt.title(title, color=title_color)
+    plt.axis('off')
+
+plt.tight_layout()
+plt.show()
